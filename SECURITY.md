@@ -1,5 +1,10 @@
 ﻿# Security Policy
 
+## Supported versions
+
+Security fixes target the latest public preview while ProofDrift is pre-1.0. Older previews receive best-effort backports only when warranted by severity. See [SUPPORT.md](SUPPORT.md) for the support matrix.
+
+
 ## Reporting a vulnerability
 
 Use GitHub's private vulnerability reporting for this repository whenever possible. Do not publish exploit details, real credentials, private repository content, or personal data in an issue.

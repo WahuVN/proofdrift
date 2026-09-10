@@ -1,20 +1,28 @@
 name: security
+
 on:
   workflow_dispatch:
   schedule:
     - cron: '23 3 * * 1'
+
 permissions:
   contents: read
+
 jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@cargo-audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master 2026-09-10
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2
+        with:
+          tool: cargo-audit
       - name: Dependency audit
         run: cargo audit
       - name: Workspace tests
         run: cargo test --locked --workspace
       - name: Strict lint
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings

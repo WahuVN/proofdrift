@@ -1,6 +1,6 @@
 [package]
 name = "proofdrift-capabilities"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 license = "Apache-2.0"
 description = "Canonical capability taxonomy and deterministic extraction helpers for ProofDrift"

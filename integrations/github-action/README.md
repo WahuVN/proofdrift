@@ -1,15 +1,43 @@
 # ProofDrift GitHub Action
 
-The action is **report-only by default**. It builds the local CLI, runs a workspace scan and patch-impact analysis, and writes a concise job summary. It never closes a PR, pushes commits, uploads source, or changes repository contents.
+The composite action runs ProofDrift scan and patch-impact checks against the caller's checked-out repository. It is **report-only by default** and installs the Rust toolchain it needs before building the pinned ProofDrift source from the selected ref.
 
-Set `strict: 'true'` only when the repository intentionally wants ProofDrift risk exit codes to fail the job. The caller controls whether JSON outputs are uploaded as artifacts.
+It does not close pull requests, push commits, upload source, or mutate repository contents. JSON reports remain in the job's temporary directory unless the caller explicitly uploads or parses them.
+
+## Usage
 
 ```yaml
-- uses: WahuVN/proofdrift/integrations/github-action@<pinned-ref>
-  with:
-    base: ${{ github.event.pull_request.base.sha }}
-    head: ${{ github.sha }}
-    strict: 'false'
+permissions:
+  contents: read
+
+steps:
+  - uses: actions/checkout@v7
+    with:
+      fetch-depth: 2
+
+  - id: proofdrift
+    uses: WahuVN/proofdrift/integrations/github-action@v0.0.2
+    with:
+      base: ${{ github.event.pull_request.base.sha }}
+      head: ${{ github.sha }}
+      strict: 'false'
+
+  - name: Upload ProofDrift reports
+    uses: actions/upload-artifact@v7
+    with:
+      name: proofdrift-reports
+      path: |
+        ${{ steps.proofdrift.outputs.scan-report-path }}
+        ${{ steps.proofdrift.outputs.patch-report-path }}
 ```
 
-Pin the action to a reviewed commit or release tag once public releases exist. Until then this integration is source-only and not a published action claim.
+For higher supply-chain assurance, pin ProofDrift and third-party actions to reviewed full commit SHAs rather than mutable tags.
+
+## Modes
+
+- `strict: 'false'`: report-only. ProofDrift exit codes are exposed as outputs but do not fail the action step.
+- `strict: 'true'`: propagate non-zero scan/patch risk exit codes and use the action as a CI gate.
+
+Outputs are `scan-exit-code`, `patch-exit-code`, `scan-report-path`, and `patch-report-path`.
+
+The action is an integration surface, not an OS sandbox. Its reports inherit the same L0/L1/L2/L3 claim boundaries documented in the main project.

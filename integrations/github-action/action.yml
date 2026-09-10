@@ -1,5 +1,5 @@
 name: ProofDrift report
-description: Builds ProofDrift from the checked-out action source and runs report-only scan/patch checks by default.
+description: Runs ProofDrift report-only scan and patch checks with a self-contained Rust setup.
 inputs:
   base:
     description: Git base revision for patch analysis.
@@ -20,9 +20,19 @@ outputs:
   patch-exit-code:
     description: Exit code returned by ProofDrift patch.
     value: ${{ steps.run.outputs.patch_code }}
+  scan-report-path:
+    description: Path to the JSON scan report in the current job.
+    value: ${{ steps.run.outputs.scan_path }}
+  patch-report-path:
+    description: Path to the JSON patch report in the current job.
+    value: ${{ steps.run.outputs.patch_path }}
 runs:
   using: composite
   steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master 2026-09-10
+      with:
+        toolchain: stable
     - name: Build ProofDrift CLI
       shell: bash
       working-directory: ${{ github.action_path }}/../..
@@ -38,12 +48,16 @@ runs:
         set +e
         BIN="${GITHUB_ACTION_PATH}/../../target/release/proofdrift"
         if [ "${RUNNER_OS}" = "Windows" ]; then BIN="${BIN}.exe"; fi
-        "${BIN}" --json scan "${GITHUB_WORKSPACE}" > "${RUNNER_TEMP}/proofdrift-scan.json"
+        scan_path="${RUNNER_TEMP}/proofdrift-scan.json"
+        patch_path="${RUNNER_TEMP}/proofdrift-patch.json"
+        "${BIN}" --json scan "${GITHUB_WORKSPACE}" > "${scan_path}"
         scan_code=$?
-        (cd "${GITHUB_WORKSPACE}" && "${BIN}" --json patch --base "${INPUT_BASE}" --head "${INPUT_HEAD}") > "${RUNNER_TEMP}/proofdrift-patch.json"
+        (cd "${GITHUB_WORKSPACE}" && "${BIN}" --json patch --base "${INPUT_BASE}" --head "${INPUT_HEAD}") > "${patch_path}"
         patch_code=$?
         echo "scan_code=${scan_code}" >> "${GITHUB_OUTPUT}"
         echo "patch_code=${patch_code}" >> "${GITHUB_OUTPUT}"
+        echo "scan_path=${scan_path}" >> "${GITHUB_OUTPUT}"
+        echo "patch_path=${patch_path}" >> "${GITHUB_OUTPUT}"
         {
           echo '## ProofDrift report'
           echo
@@ -51,7 +65,7 @@ runs:
           echo "- patch exit code: ${patch_code}"
           echo "- mode: $([ "${INPUT_STRICT}" = "true" ] && echo strict || echo report-only)"
           echo
-          echo 'Full JSON outputs remain local to the job temp directory unless the calling workflow explicitly uploads them.'
+          echo 'JSON report paths are exposed as action outputs for optional upload or downstream parsing.'
         } >> "${GITHUB_STEP_SUMMARY}"
         if [ "${INPUT_STRICT}" = "true" ]; then
           if [ "${scan_code}" -ne 0 ]; then exit "${scan_code}"; fi

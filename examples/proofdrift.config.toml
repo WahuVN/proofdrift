@@ -1,0 +1,11 @@
+# ProofDrift CLI configuration example.
+# Precedence is: CLI flags > PROOFDRIFT_* environment > this file > defaults.
+
+[output]
+# human | json
+format = "human"
+
+[run]
+policy = "safe-local-dev"
+timeout_ms = 300000
+max_output_bytes = 4194304

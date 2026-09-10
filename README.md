@@ -84,7 +84,30 @@ proofdrift verify session.proofdrift
 
 On Windows, replace `printf hello` with a direct command such as `cmd /c echo hello`. Prefer direct argv commands when precise runtime classification matters.
 
-Exit codes: `0` success, `1` operational/config or child-process failure, `2` findings/evidence gaps, `3` policy deny or approval required, `4` evidence verification failure, `5` intentionally unsupported enforcement surface.
+Exit codes are intentionally separated for CI: `0` pass, `1` tool/child-process failure, `2` findings or evidence gaps (warn), `3` policy deny or approval required (block), `4` evidence verification failure, `5` intentionally unsupported enforcement surface, and `64` invalid CLI input/configuration. `--json` keeps stdout machine-readable for both success and failure paths.
+
+### CLI configuration
+
+ProofDrift loads configuration with deterministic precedence: **CLI flags > `PROOFDRIFT_*` environment variables > config file > built-in defaults**. By default it reads `.proofdrift/config.toml` when that file exists; override it with `--config <path>` or `PROOFDRIFT_CONFIG`.
+
+```toml
+[output]
+format = "human" # human | json
+
+[run]
+policy = "safe-local-dev"
+timeout_ms = 300000
+max_output_bytes = 4194304
+```
+
+Validate or inspect the effective configuration before a CI run:
+
+```sh
+proofdrift config validate
+proofdrift --json config show
+```
+
+Environment overrides are `PROOFDRIFT_OUTPUT`, `PROOFDRIFT_POLICY`, `PROOFDRIFT_TIMEOUT_MS`, and `PROOFDRIFT_MAX_OUTPUT_BYTES`. Unknown config keys and invalid limits fail early with exit code `64`. A complete example is in `examples/proofdrift.config.toml`.
 
 ## GitHub Action
 

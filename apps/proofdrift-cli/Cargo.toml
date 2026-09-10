@@ -17,6 +17,7 @@ sha2 = "0.10"
 hex = "0.4"
 walkdir = "2"
 thiserror = "2"
+toml.workspace = true
 proofdrift-schema = { path = "../../crates/proofdrift-schema" }
 proofdrift-core = { path = "../../crates/proofdrift-core" }
 proofdrift-discover = { path = "../../crates/proofdrift-discover" }

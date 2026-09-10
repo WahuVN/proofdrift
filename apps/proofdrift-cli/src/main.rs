@@ -11,6 +11,7 @@ use proofdrift_scan::{scan_project, Severity as ScanSeverity};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -18,21 +19,58 @@ use std::process::ExitCode;
 use thiserror::Error;
 use walkdir::WalkDir;
 
+mod config;
 mod mcp_cli;
 mod runtime_cli;
 
+use config::LoadedConfig;
+
 const SCHEMA_VERSION: &str = "0.1.0";
 const TOOL_VERSION: &str = env!("CARGO_PKG_VERSION");
+const EXIT_PASS: u8 = 0;
+const EXIT_TOOL_ERROR: u8 = 1;
+const EXIT_WARN: u8 = 2;
+const EXIT_BLOCK: u8 = 3;
+const EXIT_VERIFY_FAILED: u8 = 4;
+const EXIT_UNSUPPORTED: u8 = 5;
+const EXIT_CONFIG_ERROR: u8 = 64;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum OutputFormat {
+    Human,
+    Json,
+}
 
 #[derive(Parser)]
 #[command(
     name = "proofdrift",
     version,
-    about = "Local-first coding-agent change-control and evidence CLI"
+    about = "Local-first coding-agent change-control and evidence CLI",
+    after_help = "Config precedence: CLI flags > PROOFDRIFT_* environment variables > config file > built-in defaults.\nDefault config: .proofdrift/config.toml (override with --config or PROOFDRIFT_CONFIG).\nExit classes: 0 pass, 1 tool error, 2 warn/findings, 3 block/deny, 4 verification failure, 5 unsupported, 64 config/input error."
 )]
 struct Cli {
-    #[arg(long, global = true)]
+    #[arg(
+        long,
+        global = true,
+        conflicts_with = "output",
+        help = "Emit stable machine-readable JSON (shorthand for --output json)"
+    )]
     json: bool,
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        conflicts_with = "json",
+        help = "Output format; overrides environment and config"
+    )]
+    output: Option<OutputFormat>,
+    #[arg(
+        long,
+        global = true,
+        value_name = "PATH",
+        help = "Config file path (default: .proofdrift/config.toml when present)"
+    )]
+    config: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -41,6 +79,7 @@ struct Cli {
 enum Command {
     Discover(PathArg),
     Scan(PathArg),
+    Config(ConfigArgs),
     Baseline(BaselineArgs),
     Diff(DiffArgs),
     Policy(PolicyArgs),
@@ -56,6 +95,18 @@ enum Command {
 struct PathArg {
     #[arg(default_value = ".")]
     path: PathBuf,
+}
+
+#[derive(Args)]
+struct ConfigArgs {
+    #[command(subcommand)]
+    command: ConfigCommand,
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    Validate,
+    Show,
 }
 
 #[derive(Args)]
@@ -125,8 +176,24 @@ enum IsolationArg {
 
 #[derive(Args)]
 struct RunArgs {
-    #[arg(long, default_value = "safe-local-dev")]
-    policy: String,
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Policy pack (CLI > PROOFDRIFT_POLICY > config > safe-local-dev)"
+    )]
+    policy: Option<String>,
+    #[arg(
+        long,
+        value_name = "MILLISECONDS",
+        help = "Timeout in ms (CLI > PROOFDRIFT_TIMEOUT_MS > config > 300000)"
+    )]
+    timeout_ms: Option<u64>,
+    #[arg(
+        long,
+        value_name = "BYTES",
+        help = "Captured output limit (CLI > PROOFDRIFT_MAX_OUTPUT_BYTES > config > 4194304)"
+    )]
+    max_output_bytes: Option<usize>,
     #[arg(long, value_enum, default_value_t = IsolationArg::None)]
     isolate: IsolationArg,
     /// Immutable container image reference required for --isolate docker.
@@ -135,10 +202,6 @@ struct RunArgs {
     /// Permit the isolated command to modify the mounted workspace.
     #[arg(long, default_value_t = false)]
     workspace_write: bool,
-    #[arg(long, default_value_t = 300_000)]
-    timeout_ms: u64,
-    #[arg(long, default_value_t = 4 * 1024 * 1024)]
-    max_output_bytes: usize,
     #[arg(last = true, required = true)]
     command: Vec<String>,
 }
@@ -168,10 +231,63 @@ enum ProvenanceCommand {
 enum AppError {
     #[error("I/O error: {0}")]
     Io(#[from] io::Error),
-    #[error("JSON error: {0}")]
+    #[error("JSON processing error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("configuration error: {0}")]
+    Config(String),
     #[error("invalid input: {0}")]
     Invalid(String),
+    #[error("tool error: {0}")]
+    Tool(String),
+    #[error("feature unavailable: {0}")]
+    Unsupported(String),
+}
+
+impl From<config::ConfigError> for AppError {
+    fn from(value: config::ConfigError) -> Self {
+        Self::Config(value.to_string())
+    }
+}
+
+impl AppError {
+    fn exit_code(&self) -> u8 {
+        match self {
+            Self::Config(_) | Self::Invalid(_) => EXIT_CONFIG_ERROR,
+            Self::Unsupported(_) => EXIT_UNSUPPORTED,
+            Self::Io(_) | Self::Json(_) | Self::Tool(_) => EXIT_TOOL_ERROR,
+        }
+    }
+
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Io(_) => "PD_CLI_IO",
+            Self::Json(_) => "PD_CLI_JSON",
+            Self::Config(_) => "PD_CLI_CONFIG",
+            Self::Invalid(_) => "PD_CLI_INPUT",
+            Self::Tool(_) => "PD_CLI_TOOL",
+            Self::Unsupported(_) => "PD_CLI_UNSUPPORTED",
+        }
+    }
+
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Config(_) | Self::Invalid(_) => "config_error",
+            Self::Unsupported(_) => "unsupported",
+            Self::Io(_) | Self::Json(_) | Self::Tool(_) => "tool_error",
+        }
+    }
+
+    fn hint(&self) -> &'static str {
+        match self {
+            Self::Config(_) | Self::Invalid(_) => {
+                "Check --help, proofdrift config validate, and the reported input/config path."
+            }
+            Self::Unsupported(_) => "Use a supported enforcement surface or integration.",
+            Self::Io(_) | Self::Json(_) | Self::Tool(_) => {
+                "Retry after fixing the reported local/tooling failure; this is not a policy verdict."
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -229,22 +345,92 @@ struct Change {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    match run(cli) {
-        Ok(code) => ExitCode::from(code),
-        Err(err) => {
-            eprintln!("error: {err}");
-            ExitCode::from(1)
+    let raw_args = std::env::args_os().collect::<Vec<_>>();
+    let raw_json = raw_requests_json(&raw_args);
+    let cli = match Cli::try_parse_from(raw_args) {
+        Ok(cli) => cli,
+        Err(error) if error.exit_code() == 0 => {
+            let _ = error.print();
+            return ExitCode::from(EXIT_PASS);
         }
+        Err(error) => {
+            if raw_json {
+                let app_error = AppError::Config(format!("CLI parse error: {error}"));
+                return finish_error(&app_error, true);
+            }
+            let _ = error.print();
+            return ExitCode::from(EXIT_CONFIG_ERROR);
+        }
+    };
+
+    let explicit_output = if cli.json {
+        Some(true)
+    } else {
+        cli.output.map(|value| matches!(value, OutputFormat::Json))
+    };
+    let error_json = explicit_output.unwrap_or(false);
+    let loaded = match LoadedConfig::load(cli.config.as_deref()) {
+        Ok(config) => config,
+        Err(error) => return finish_error(&AppError::from(error), error_json),
+    };
+    let json = match loaded.resolve_json(explicit_output) {
+        Ok(json) => json,
+        Err(error) => return finish_error(&AppError::from(error), error_json),
+    };
+
+    match run(cli, &loaded, json) {
+        Ok(code) => ExitCode::from(code),
+        Err(error) => finish_error(&error, json),
     }
 }
 
-fn run(cli: Cli) -> Result<u8, AppError> {
+fn raw_requests_json(args: &[OsString]) -> bool {
+    let args = args
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    args.iter()
+        .any(|arg| arg == "--json" || arg.eq_ignore_ascii_case("--output=json"))
+        || args
+            .windows(2)
+            .any(|pair| pair[0] == "--output" && pair[1].eq_ignore_ascii_case("json"))
+}
+
+fn finish_error(error: &AppError, json: bool) -> ExitCode {
+    let exit_code = error.exit_code();
+    if json {
+        let payload = serde_json::json!({
+            "schema_version": SCHEMA_VERSION,
+            "generated_at": "deterministic-local",
+            "tool_version": TOOL_VERSION,
+            "status": "error",
+            "exit_code": exit_code,
+            "error": {
+                "kind": error.kind(),
+                "code": error.code(),
+                "message": error.to_string(),
+                "hint": error.hint()
+            },
+            "diagnostics": [{
+                "code": error.code(),
+                "message": error.to_string()
+            }],
+            "evidence_refs": []
+        });
+        println!("{payload}");
+    } else {
+        eprintln!("error [{}]: {error}", error.code());
+        eprintln!("hint: {}", error.hint());
+    }
+    ExitCode::from(exit_code)
+}
+
+fn run(cli: Cli, loaded: &LoadedConfig, json: bool) -> Result<u8, AppError> {
     match cli.command {
         Command::Discover(args) => {
             let data =
                 discover_project(&args.path).map_err(|e| AppError::Invalid(e.to_string()))?;
-            emit(cli.json, &args.path, data, |d| {
+            emit(json, &args.path, data, |d| {
                 println!("Discovered {} artifacts", d.artifacts.len());
                 for a in &d.artifacts {
                     println!("  {}  {}", a.artifact_type, a.local_path);
@@ -253,7 +439,7 @@ fn run(cli: Cli) -> Result<u8, AppError> {
                     println!("  diagnostic: {diagnostic}");
                 }
             })?;
-            Ok(0)
+            Ok(EXIT_PASS)
         }
         Command::Scan(args) => {
             let data = scan_project(&args.path).map_err(|e| AppError::Invalid(e.to_string()))?;
@@ -262,11 +448,11 @@ fn run(cli: Cli) -> Result<u8, AppError> {
                 .iter()
                 .any(|f| matches!(f.severity, ScanSeverity::High | ScanSeverity::Critical))
             {
-                2
+                EXIT_WARN
             } else {
-                0
+                EXIT_PASS
             };
-            emit(cli.json, &args.path, data, |d| {
+            emit(json, &args.path, data, |d| {
                 println!("Findings: {}", d.findings.len());
                 for f in &d.findings {
                     println!(
@@ -280,13 +466,14 @@ fn run(cli: Cli) -> Result<u8, AppError> {
             })?;
             Ok(code)
         }
-        Command::Baseline(args) => baseline(cli.json, args.command),
-        Command::Diff(args) => diff(cli.json, args),
-        Command::Policy(args) => policy(cli.json, args.command),
-        Command::Report(args) => report(cli.json, args),
-        Command::Verify(args) => verify_bundle_shape(cli.json, &args.bundle),
-        Command::Patch(args) => patch(cli.json, args),
-        Command::Run(args) => run_guarded(cli.json, args),
+        Command::Config(args) => config_command(json, args.command, loaded),
+        Command::Baseline(args) => baseline(json, args.command),
+        Command::Diff(args) => diff(json, args),
+        Command::Policy(args) => policy(json, args.command),
+        Command::Report(args) => report(json, args),
+        Command::Verify(args) => verify_bundle_shape(json, &args.bundle),
+        Command::Patch(args) => patch(json, args),
+        Command::Run(args) => run_guarded(json, args, loaded),
         Command::Mcp(args) => match args.command {
             McpCommand::Proxy { config } => {
                 let config =
@@ -294,8 +481,49 @@ fn run(cli: Cli) -> Result<u8, AppError> {
                 mcp_cli::run_proxy(&config).map_err(AppError::Invalid)
             }
         },
-        Command::Provenance(args) => provenance(cli.json, args.command),
+        Command::Provenance(args) => provenance(json, args.command),
     }
+}
+
+fn config_command(
+    json: bool,
+    command: ConfigCommand,
+    loaded: &LoadedConfig,
+) -> Result<u8, AppError> {
+    let view = loaded.effective_view(json)?;
+    match command {
+        ConfigCommand::Validate => {
+            if json {
+                emit(
+                    true,
+                    loaded.source().unwrap_or_else(|| Path::new(".")),
+                    serde_json::json!({
+                        "valid": true,
+                        "config": view
+                    }),
+                    |_| {},
+                )?;
+            } else if let Some(path) = loaded.source() {
+                println!("VALID: {}", path.display());
+            } else {
+                println!("VALID: no config file selected; built-in defaults are valid");
+            }
+        }
+        ConfigCommand::Show => {
+            let scope = loaded.source().unwrap_or_else(|| Path::new("."));
+            emit(json, scope, view, |value| {
+                println!(
+                    "Config source: {}",
+                    value.source.as_deref().unwrap_or("built-in defaults")
+                );
+                println!("Output: {}", value.output);
+                println!("Run policy: {}", value.run.policy);
+                println!("Run timeout: {} ms", value.run.timeout_ms);
+                println!("Run max output: {} bytes", value.run.max_output_bytes);
+            })?;
+        }
+    }
+    Ok(EXIT_PASS)
 }
 
 fn emit<T: Serialize>(
@@ -664,8 +892,9 @@ fn policy(json: bool, cmd: PolicyCommand) -> Result<u8, AppError> {
     }
 }
 
-fn run_guarded(json: bool, args: RunArgs) -> Result<u8, AppError> {
+fn run_guarded(json: bool, args: RunArgs, loaded: &LoadedConfig) -> Result<u8, AppError> {
     let cwd = std::env::current_dir()?;
+    let resolved = loaded.resolve_run(args.policy, args.timeout_ms, args.max_output_bytes)?;
     let isolation = match args.isolate {
         IsolationArg::None => {
             if args.docker_image.is_some() || args.workspace_write {
@@ -690,13 +919,17 @@ fn run_guarded(json: bool, args: RunArgs) -> Result<u8, AppError> {
     match runtime_cli::execute_guarded_command(
         &args.command,
         &cwd,
-        &args.policy,
-        args.timeout_ms,
-        args.max_output_bytes,
+        &resolved.policy,
+        resolved.timeout_ms,
+        resolved.max_output_bytes,
         isolation,
     ) {
         Ok(data) => {
-            let code = if data.status_code == Some(0) { 0 } else { 1 };
+            let code = if data.status_code == Some(0) {
+                EXIT_PASS
+            } else {
+                EXIT_TOOL_ERROR
+            };
             emit(json, &cwd, data, |d| {
                 if !d.stdout.is_empty() {
                     print!("{}", d.stdout);
@@ -731,11 +964,25 @@ fn run_guarded(json: bool, args: RunArgs) -> Result<u8, AppError> {
             evidence_db,
             events_recorded,
         }) => {
-            eprintln!("DENIED: policy blocked command before process dispatch");
-            eprintln!("Session: {session_id}");
-            eprintln!("Evidence events: {events_recorded}");
-            eprintln!("Evidence DB: {evidence_db}");
-            Ok(3)
+            let data = serde_json::json!({
+                "verdict": "block",
+                "reason": "policy_denied",
+                "dispatched": false,
+                "session_id": session_id,
+                "events_recorded": events_recorded,
+                "evidence_db": evidence_db,
+                "policy_pack": resolved.policy
+            });
+            emit(json, &cwd, data, |d| {
+                eprintln!("DENIED: policy blocked command before process dispatch");
+                eprintln!("Session: {}", d["session_id"].as_str().unwrap_or("unknown"));
+                eprintln!("Evidence events: {}", d["events_recorded"]);
+                eprintln!(
+                    "Evidence DB: {}",
+                    d["evidence_db"].as_str().unwrap_or("unknown")
+                );
+            })?;
+            Ok(EXIT_BLOCK)
         }
         Err(runtime_cli::GuardedRunError::ApprovalRequired {
             approval_id,
@@ -743,13 +990,32 @@ fn run_guarded(json: bool, args: RunArgs) -> Result<u8, AppError> {
             evidence_db,
             events_recorded,
         }) => {
-            eprintln!("APPROVAL_REQUIRED: {approval_id}; command was not dispatched");
-            eprintln!("Session: {session_id}");
-            eprintln!("Evidence events: {events_recorded}");
-            eprintln!("Evidence DB: {evidence_db}");
-            Ok(3)
+            let data = serde_json::json!({
+                "verdict": "block",
+                "reason": "approval_required",
+                "approval_id": approval_id,
+                "dispatched": false,
+                "session_id": session_id,
+                "events_recorded": events_recorded,
+                "evidence_db": evidence_db,
+                "policy_pack": resolved.policy
+            });
+            emit(json, &cwd, data, |d| {
+                eprintln!(
+                    "APPROVAL_REQUIRED: {}; command was not dispatched",
+                    d["approval_id"].as_str().unwrap_or("unknown")
+                );
+                eprintln!("Session: {}", d["session_id"].as_str().unwrap_or("unknown"));
+                eprintln!("Evidence events: {}", d["events_recorded"]);
+                eprintln!(
+                    "Evidence DB: {}",
+                    d["evidence_db"].as_str().unwrap_or("unknown")
+                );
+            })?;
+            Ok(EXIT_BLOCK)
         }
-        Err(error) => Err(AppError::Invalid(error.to_string())),
+        Err(runtime_cli::GuardedRunError::Setup(error)) => Err(AppError::Config(error)),
+        Err(runtime_cli::GuardedRunError::Runtime(error)) => Err(AppError::Tool(error)),
     }
 }
 
@@ -999,7 +1265,11 @@ fn verify_bundle_shape(json: bool, path: &Path) -> Result<u8, AppError> {
                     result.final_event_hash
                 );
             }
-            Ok(if result.valid { 0 } else { 4 })
+            Ok(if result.valid {
+                EXIT_PASS
+            } else {
+                EXIT_VERIFY_FAILED
+            })
         }
         Err(err) => {
             if json {
@@ -1016,7 +1286,7 @@ fn verify_bundle_shape(json: bool, path: &Path) -> Result<u8, AppError> {
             } else {
                 eprintln!("verification failed: {err}");
             }
-            Ok(4)
+            Ok(EXIT_VERIFY_FAILED)
         }
     }
 }

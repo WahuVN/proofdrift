@@ -37,6 +37,7 @@ For higher supply-chain assurance, pin ProofDrift and third-party actions to rev
 
 - `strict: 'false'`: report-only. ProofDrift exit codes are exposed as outputs but do not fail the action step.
 - `strict: 'true'`: propagate non-zero scan/patch risk exit codes and use the action as a CI gate.
+- Any other `strict` value fails immediately with exit code `64` instead of silently falling back to report-only mode.
 
 Outputs are `scan-exit-code`, `patch-exit-code`, `scan-report-path`, and `patch-report-path`.
 

@@ -45,6 +45,10 @@ runs:
         INPUT_HEAD: ${{ inputs.head }}
         INPUT_STRICT: ${{ inputs.strict }}
       run: |
+        if [ "${INPUT_STRICT}" != "true" ] && [ "${INPUT_STRICT}" != "false" ]; then
+          echo "error: strict must be exactly 'true' or 'false', got '${INPUT_STRICT}'" >&2
+          exit 64
+        fi
         set +e
         BIN="${GITHUB_ACTION_PATH}/../../target/release/proofdrift"
         if [ "${RUNNER_OS}" = "Windows" ]; then BIN="${BIN}.exe"; fi

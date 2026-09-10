@@ -1,4 +1,4 @@
-﻿# ProofDrift
+# ProofDrift
 
 [![CI](https://github.com/WahuVN/proofdrift/actions/workflows/ci.yml/badge.svg)](https://github.com/WahuVN/proofdrift/actions/workflows/ci.yml)
 [![Security](https://github.com/WahuVN/proofdrift/actions/workflows/security.yml/badge.svg)](https://github.com/WahuVN/proofdrift/actions/workflows/security.yml)
@@ -29,7 +29,7 @@ The MCP broker core is implemented and tested for deny-before-dispatch, approval
 
 ## Install from source
 
-Rust 1.85 or newer is required.
+Rust 1.89 or newer is required.
 
 ```sh
 git clone https://github.com/WahuVN/proofdrift.git

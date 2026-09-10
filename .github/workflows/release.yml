@@ -14,7 +14,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Build locked release binary
         run: cargo build --locked --release -p proofdrift-cli
@@ -35,7 +35,7 @@ jobs:
           $hash = (Get-FileHash dist/proofdrift.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  proofdrift.exe" | Set-Content -Encoding ascii dist/proofdrift.exe.sha256
       - name: Upload unsigned build evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: proofdrift-${{ runner.os }}-${{ runner.arch }}
           path: dist/

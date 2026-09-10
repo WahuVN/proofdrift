@@ -8,7 +8,7 @@ description = "Tamper-evident local evidence store and .proofdrift bundle implem
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 regex = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }

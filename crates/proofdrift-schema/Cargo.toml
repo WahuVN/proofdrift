@@ -8,7 +8,7 @@ description = "Canonical data contracts and deterministic hashing for ProofDrift
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 thiserror = "2"
 
 [dev-dependencies]

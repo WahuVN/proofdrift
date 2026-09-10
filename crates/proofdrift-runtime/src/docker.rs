@@ -3,7 +3,13 @@ use crate::{
     TokioCommandRunner,
 };
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 #[derive(Debug, Clone)]
 pub struct DockerIsolationConfig {
@@ -49,15 +55,71 @@ impl DockerIsolationConfig {
 #[derive(Debug, Clone)]
 pub struct DockerCommandRunner {
     config: DockerIsolationConfig,
+    verified: Arc<AtomicBool>,
 }
 
 impl DockerCommandRunner {
     pub fn new(config: DockerIsolationConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            verified: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     pub fn config(&self) -> &DockerIsolationConfig {
         &self.config
+    }
+
+    /// Verify the Docker client/daemon boundary and immutable image identity before
+    /// this runner is allowed to advertise or dispatch as L2. This deliberately
+    /// does not execute the image before policy evaluation.
+    pub async fn verify_boundary(&self) -> Result<(), ProcessError> {
+        let mut version = ProcessInvocation::new(
+            "docker",
+            vec![
+                "version".into(),
+                "--format".into(),
+                "{{.Client.Version}}|{{.Server.Version}}".into(),
+            ],
+        );
+        version.timeout_ms = 10_000;
+        version.max_output_bytes = 16 * 1024;
+        let version_out = TokioCommandRunner.run(&version).await?;
+        if version_out.status_code != Some(0)
+            || String::from_utf8_lossy(&version_out.stdout)
+                .trim()
+                .is_empty()
+        {
+            return Err(ProcessError::Runner(
+                "Docker L2 preflight could not verify a reachable client and daemon".into(),
+            ));
+        }
+
+        let mut inspect = ProcessInvocation::new(
+            "docker",
+            vec![
+                "image".into(),
+                "inspect".into(),
+                self.config.image.clone(),
+                "--format".into(),
+                "{{.Id}}".into(),
+            ],
+        );
+        inspect.timeout_ms = 10_000;
+        inspect.max_output_bytes = 16 * 1024;
+        let inspect_out = TokioCommandRunner.run(&inspect).await?;
+        let image_id = String::from_utf8_lossy(&inspect_out.stdout);
+        if inspect_out.status_code != Some(0) || !image_id.trim().starts_with("sha256:") {
+            return Err(ProcessError::Runner(
+                "Docker L2 preflight could not resolve the configured digest-pinned image".into(),
+            ));
+        }
+        self.verified.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    pub fn boundary_verified(&self) -> bool {
+        self.verified.load(Ordering::Acquire)
     }
 
     fn docker_invocation(
@@ -152,16 +214,25 @@ impl DockerCommandRunner {
 #[async_trait]
 impl CommandRunner for DockerCommandRunner {
     async fn run(&self, invocation: &ProcessInvocation) -> Result<ProcessOutput, ProcessError> {
+        if !self.boundary_verified() {
+            return Err(ProcessError::Runner(
+                "Docker L2 boundary was not verified before dispatch".into(),
+            ));
+        }
         let docker = self.docker_invocation(invocation)?;
         TokioCommandRunner.run(&docker).await
     }
 
     fn enforcement_level(&self) -> EnforcementLevel {
-        EnforcementLevel::L2Isolated
+        if self.boundary_verified() {
+            EnforcementLevel::L2Isolated
+        } else {
+            EnforcementLevel::L1Brokered
+        }
     }
 
     fn enforcement_scope(&self) -> &'static str {
-        "docker-container: digest-pinned image, network none, read-only rootfs, non-root uid/gid, all Linux capabilities dropped, no-new-privileges, PID/memory/CPU limits; workspace bind is explicit"
+        "docker-container: verified client/daemon and digest-pinned image preflight; runtime dispatch uses network none, read-only rootfs, non-root uid/gid, all Linux capabilities dropped, no-new-privileges, PID/memory/CPU limits; workspace bind is explicit"
     }
 
     fn adapter_id(&self) -> &'static str {
@@ -234,6 +305,10 @@ mod tests {
         assert!(joined.contains("--security-opt=no-new-privileges:true"));
         assert!(joined.contains("--user=65534:65534"));
         assert!(joined.contains(",readonly"));
+        assert!(!runner.boundary_verified());
+        assert_eq!(runner.enforcement_level(), EnforcementLevel::L1Brokered);
+        runner.verified.store(true, Ordering::Release);
+        assert!(runner.boundary_verified());
         assert_eq!(runner.enforcement_level(), EnforcementLevel::L2Isolated);
     }
 

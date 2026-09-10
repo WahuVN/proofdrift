@@ -281,15 +281,25 @@ pub(crate) fn execute_guarded_command(
     let sink = Arc::new(PersistentRuntimeSink::open(&db_path)?);
     let approvals = Arc::new(ApprovalManager::new(60_000));
     let session_id = new_session_id("run");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| GuardedRunError::Setup(error.to_string()))?;
     let runner: Arc<dyn CommandRunner> = match isolation {
         RunIsolation::None => Arc::new(TokioCommandRunner),
         RunIsolation::Docker {
             image,
             workspace_writable,
-        } => Arc::new(DockerCommandRunner::new(
-            DockerIsolationConfig::hardened(image, cwd, workspace_writable)
-                .map_err(|error| GuardedRunError::Setup(error.to_string()))?,
-        )),
+        } => {
+            let runner = DockerCommandRunner::new(
+                DockerIsolationConfig::hardened(image, cwd, workspace_writable)
+                    .map_err(|error| GuardedRunError::Setup(error.to_string()))?,
+            );
+            runtime
+                .block_on(runner.verify_boundary())
+                .map_err(|error| GuardedRunError::Setup(error.to_string()))?;
+            Arc::new(runner)
+        }
     };
     let enforcement_level = match runner.enforcement_level() {
         EnforcementLevel::L0Inventoried => "L0",
@@ -311,10 +321,6 @@ pub(crate) fn execute_guarded_command(
     invocation.timeout_ms = timeout_ms.max(1);
     invocation.max_output_bytes = max_output_bytes.max(1);
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| GuardedRunError::Setup(error.to_string()))?;
     let output = match runtime.block_on(executor.execute(&invocation, None)) {
         Ok(output) => output,
         Err(ProcessError::Denied) => {

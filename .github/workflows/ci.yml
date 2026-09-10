@@ -74,10 +74,45 @@ jobs:
           test -f '${{ steps.proofdrift.outputs.scan-report-path }}'
           test -f '${{ steps.proofdrift.outputs.patch-report-path }}'
 
+  mcp-e2e:
+    name: mcp-2026-e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master 2026-09-10
+        with:
+          toolchain: stable
+      - name: Build CLI
+        run: cargo build --locked -p proofdrift-cli
+      - name: Verify stdio, HTTP/SSE, MRTR, schema-drift and evidence boundaries
+        run: python examples/fixtures/mcp2026_e2e.py --proofdrift target/debug/proofdrift
+
+  docker-l2-e2e:
+    name: docker-l2-e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master 2026-09-10
+        with:
+          toolchain: stable
+      - name: Build CLI
+        run: cargo build --locked -p proofdrift-cli
+      - name: Resolve immutable Alpine test image
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull alpine:3.22
+          image="$(docker image inspect alpine:3.22 --format '{{index .RepoDigests 0}}')"
+          test -n "$image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+      - name: Verify real Docker L2 boundary and recorded evidence
+        run: python examples/fixtures/l2_docker_e2e.py --proofdrift target/debug/proofdrift --image '${{ steps.image.outputs.image }}'
+
   ci-success:
     name: ci-success
     if: always()
-    needs: [quality, test, msrv, action-smoke]
+    needs: [quality, test, msrv, action-smoke, mcp-e2e, docker-l2-e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Require all CI jobs to pass
@@ -87,3 +122,5 @@ jobs:
           test '${{ needs.test.result }}' = 'success'
           test '${{ needs.msrv.result }}' = 'success'
           test '${{ needs.action-smoke.result }}' = 'success'
+          test '${{ needs.mcp-e2e.result }}' = 'success'
+          test '${{ needs.docker-l2-e2e.result }}' = 'success'

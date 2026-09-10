@@ -28,15 +28,16 @@ pub struct ToolDefinition {
     pub description: Option<String>,
     #[serde(default, rename = "inputSchema")]
     pub input_schema: Value,
+    /// Preserve the rest of the MCP tool definition losslessly (title, outputSchema,
+    /// annotations, icons, extension fields, and future additive members). Security drift
+    /// fingerprints must cover the entire definition rather than a hand-picked subset.
+    #[serde(default, flatten)]
+    pub extensions: BTreeMap<String, Value>,
 }
 
 impl ToolDefinition {
     pub fn fingerprint(&self) -> Result<String, serde_json::Error> {
-        canonical_sha256(&json!({
-            "name": self.name,
-            "description": self.description,
-            "inputSchema": self.input_schema,
-        }))
+        canonical_sha256(&serde_json::to_value(self)?)
     }
 }
 
@@ -176,6 +177,21 @@ pub trait DownstreamMcp: Send + Sync {
         name: &str,
         arguments: Value,
     ) -> Result<DownstreamResponse, BrokerError>;
+
+    async fn call_tool_with_context(
+        &self,
+        name: &str,
+        arguments: Value,
+        request_state: Option<String>,
+        input_responses: Option<Value>,
+    ) -> Result<DownstreamResponse, BrokerError> {
+        if request_state.is_some() || input_responses.is_some() {
+            return Err(BrokerError::Downstream(
+                "downstream adapter does not support MCP 2026 multi-round-trip call context".into(),
+            ));
+        }
+        self.call_tool(name, arguments).await
+    }
 }
 
 #[derive(Debug, Error)]
@@ -255,11 +271,28 @@ impl McpBroker {
         }
     }
 
-    pub async fn refresh_tools(&self) -> Result<ToolSnapshot, BrokerError> {
+    pub async fn list_tools(&self) -> Result<Vec<ToolDefinition>, BrokerError> {
         let tools = self.with_timeout(self.downstream.list_tools()).await??;
         let snapshot = ToolSnapshot::from_tools(&self.server_id, &self.protocol_version, &tools)?;
-        *self.baseline.lock().unwrap() = Some(snapshot.clone());
-        Ok(snapshot)
+        *self.baseline.lock().unwrap() = Some(snapshot);
+        Ok(tools)
+    }
+
+    pub async fn refresh_tools(&self) -> Result<ToolSnapshot, BrokerError> {
+        let _ = self.list_tools().await?;
+        self.baseline()
+            .ok_or_else(|| BrokerError::Downstream("tool baseline was not installed".into()))
+    }
+
+    /// Complete an approval challenge from a trusted local control surface. The challenge id
+    /// itself is never an execution token; only the random one-time grant can authorize retry.
+    pub fn approve_challenge(
+        &self,
+        approval_id: &str,
+    ) -> Result<proofdrift_runtime::ApprovalGrant, BrokerError> {
+        self.approvals
+            .approve(approval_id)
+            .map_err(BrokerError::from)
     }
 
     pub fn baseline(&self) -> Option<ToolSnapshot> {
@@ -270,6 +303,18 @@ impl McpBroker {
         &self,
         name: &str,
         arguments: Value,
+        approval_token: Option<&str>,
+    ) -> Result<DownstreamResponse, BrokerError> {
+        self.call_tool_with_context(name, arguments, None, None, approval_token)
+            .await
+    }
+
+    pub async fn call_tool_with_context(
+        &self,
+        name: &str,
+        arguments: Value,
+        request_state: Option<&str>,
+        input_responses: Option<&Value>,
         approval_token: Option<&str>,
     ) -> Result<DownstreamResponse, BrokerError> {
         let request_size = serde_json::to_vec(&arguments)?.len();
@@ -320,6 +365,12 @@ impl McpBroker {
                 "tool_fingerprint": tool_fingerprint,
                 "arguments_digest": canonical_sha256(&arguments)?,
                 "arguments": redact_json(&arguments),
+                "request_state_digest": request_state
+                    .map(|value| canonical_sha256(&Value::String(value.to_owned())))
+                    .transpose()?,
+                "input_responses_digest": input_responses
+                    .map(canonical_sha256)
+                    .transpose()?,
                 "protocol_version": self.protocol_version,
             }),
         );
@@ -332,6 +383,12 @@ impl McpBroker {
             "policy_bundle_digest": decision.policy_bundle_digest,
             "decision_hash": decision.decision_hash,
             "tool_fingerprint": tool_fingerprint,
+            "request_state_digest": request_state
+                .map(|value| canonical_sha256(&Value::String(value.to_owned())))
+                .transpose()?,
+            "input_responses_digest": input_responses
+                .map(canonical_sha256)
+                .transpose()?,
         }))?;
 
         match decision.decision {
@@ -378,7 +435,12 @@ impl McpBroker {
             mode,
         )?;
         let response = self
-            .with_timeout(self.downstream.call_tool(name, arguments.clone()))
+            .with_timeout(self.downstream.call_tool_with_context(
+                name,
+                arguments.clone(),
+                request_state.map(str::to_owned),
+                input_responses.cloned(),
+            ))
             .await??;
         let response_size = serde_json::to_vec(&response)?.len();
         if response_size > self.limits.max_response_bytes {
@@ -454,6 +516,9 @@ impl McpBroker {
                 outcome: outcome.to_owned(),
                 enforcement_level: EnforcementLevel::L1Brokered,
                 enforcement_mode: mode,
+                enforcement_scope:
+                    "mcp-call-dispatch-boundary; policy, approval, and schema-drift checks occur before downstream tool dispatch"
+                        .to_owned(),
                 evidence_refs: Vec::new(),
                 prev_event_hash: None,
                 event_hash: None,
@@ -535,6 +600,7 @@ mod tests {
                 "properties": {"id": {"type": "string"}},
                 "required": ["id"]
             }),
+            extensions: BTreeMap::new(),
         }
     }
 
@@ -703,11 +769,13 @@ mod tests {
             name: "read".into(),
             description: None,
             input_schema: json!({"type":"object","properties":{"b":{"type":"string"},"a":{"type":"number"}}}),
+            extensions: BTreeMap::new(),
         };
         let b = ToolDefinition {
             name: "read".into(),
             description: None,
             input_schema: json!({"properties":{"a":{"type":"number"},"b":{"type":"string"}},"type":"object"}),
+            extensions: BTreeMap::new(),
         };
         assert_eq!(a.fingerprint().unwrap(), b.fingerprint().unwrap());
     }
@@ -722,11 +790,13 @@ mod tests {
                     name: "z".into(),
                     description: None,
                     input_schema: json!({"type":"object"}),
+                    extensions: BTreeMap::new(),
                 },
                 ToolDefinition {
                     name: "a".into(),
                     description: None,
                     input_schema: json!({"type":"object"}),
+                    extensions: BTreeMap::new(),
                 },
             ],
         )
@@ -738,6 +808,7 @@ mod tests {
                 name: "m".into(),
                 description: None,
                 input_schema: json!({"type":"object"}),
+                extensions: BTreeMap::new(),
             }],
         )
         .unwrap();

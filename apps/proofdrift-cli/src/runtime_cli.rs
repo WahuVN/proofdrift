@@ -4,8 +4,9 @@ use proofdrift_policy::{
     PolicyRequest as CedarPolicyRequest,
 };
 use proofdrift_runtime::{
-    ApprovalManager, Decision as RuntimeDecision, EnforcementLevel, EnforcementMode,
-    EventSinkError, GuardedProcessExecutor, PolicyDecision as RuntimePolicyDecision,
+    ApprovalManager, CommandRunner, Decision as RuntimeDecision, DockerCommandRunner,
+    DockerIsolationConfig, EnforcementLevel, EnforcementMode, EventSinkError,
+    GuardedProcessExecutor, PolicyDecision as RuntimePolicyDecision,
     PolicyEvaluator as RuntimePolicyEvaluator, PolicyRequest as RuntimePolicyRequest, ProcessError,
     ProcessInvocation, RuntimeEvent, RuntimeEventSink, TokioCommandRunner,
 };
@@ -69,13 +70,21 @@ pub(crate) enum GuardedRunError {
     Runtime(String),
 }
 
-struct CedarRuntimePolicy {
+pub(crate) enum RunIsolation {
+    None,
+    Docker {
+        image: String,
+        workspace_writable: bool,
+    },
+}
+
+pub(crate) struct CedarRuntimePolicy {
     engine: PolicyEngine,
     pack: Arc<CompiledPolicyPack>,
 }
 
 impl CedarRuntimePolicy {
-    fn from_builtin(name: &str) -> Result<Self, GuardedRunError> {
+    pub(crate) fn from_builtin(name: &str) -> Result<Self, GuardedRunError> {
         let source = built_in_policy_pack(name).ok_or_else(|| {
             GuardedRunError::Setup(format!("unknown built-in policy pack: {name}"))
         })?;
@@ -210,6 +219,10 @@ impl RuntimeEventSink for PersistentRuntimeSink {
             serde_json::to_value(event.enforcement_mode)
                 .map_err(|error| EventSinkError::new(error.to_string()))?,
         );
+        extensions.insert(
+            "enforcement_scope".into(),
+            Value::String(event.enforcement_scope.clone()),
+        );
         let input = AgentEventInput {
             event_id: event.event_id,
             session_id: event.session_id,
@@ -258,6 +271,7 @@ pub(crate) fn execute_guarded_command(
     policy_name: &str,
     timeout_ms: u64,
     max_output_bytes: usize,
+    isolation: RunIsolation,
 ) -> Result<GuardedRunResult, GuardedRunError> {
     let (program, args) = command
         .split_first()
@@ -267,11 +281,28 @@ pub(crate) fn execute_guarded_command(
     let sink = Arc::new(PersistentRuntimeSink::open(&db_path)?);
     let approvals = Arc::new(ApprovalManager::new(60_000));
     let session_id = new_session_id("run");
+    let runner: Arc<dyn CommandRunner> = match isolation {
+        RunIsolation::None => Arc::new(TokioCommandRunner),
+        RunIsolation::Docker {
+            image,
+            workspace_writable,
+        } => Arc::new(DockerCommandRunner::new(
+            DockerIsolationConfig::hardened(image, cwd, workspace_writable)
+                .map_err(|error| GuardedRunError::Setup(error.to_string()))?,
+        )),
+    };
+    let enforcement_level = match runner.enforcement_level() {
+        EnforcementLevel::L0Inventoried => "L0",
+        EnforcementLevel::L1Brokered => "L1",
+        EnforcementLevel::L2Isolated => "L2",
+        EnforcementLevel::L3Attested => "L3",
+    };
+    let enforcement_scope = runner.enforcement_scope();
     let executor = GuardedProcessExecutor::new(
         policy,
         sink.clone(),
         approvals,
-        Arc::new(TokioCommandRunner),
+        runner,
         session_id.clone(),
         "proofdrift-cli",
     );
@@ -315,9 +346,8 @@ pub(crate) fn execute_guarded_command(
         stderr_lossy,
         events_recorded: sink.count(),
         evidence_db: db_path.display().to_string(),
-        enforcement_level: "L1",
-        enforcement_scope:
-            "process-dispatch-boundary; not OS isolation or nested side-effect interception",
+        enforcement_level,
+        enforcement_scope,
         policy_pack: policy_name.into(),
     })
 }

@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use proofdrift_discover::discover_project;
 use proofdrift_evidence::{verify_proofdrift_bundle, BundleLimits};
 use proofdrift_patch::{analyze_git_range, TestPriority};
@@ -18,6 +18,7 @@ use std::process::ExitCode;
 use thiserror::Error;
 use walkdir::WalkDir;
 
+mod mcp_cli;
 mod runtime_cli;
 
 const SCHEMA_VERSION: &str = "0.1.0";
@@ -116,10 +117,24 @@ struct PatchArgs {
     #[arg(long)]
     head: String,
 }
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum IsolationArg {
+    None,
+    Docker,
+}
+
 #[derive(Args)]
 struct RunArgs {
     #[arg(long, default_value = "safe-local-dev")]
     policy: String,
+    #[arg(long, value_enum, default_value_t = IsolationArg::None)]
+    isolate: IsolationArg,
+    /// Immutable container image reference required for --isolate docker.
+    #[arg(long)]
+    docker_image: Option<String>,
+    /// Permit the isolated command to modify the mounted workspace.
+    #[arg(long, default_value_t = false)]
+    workspace_write: bool,
     #[arg(long, default_value_t = 300_000)]
     timeout_ms: u64,
     #[arg(long, default_value_t = 4 * 1024 * 1024)]
@@ -157,8 +172,6 @@ enum AppError {
     Json(#[from] serde_json::Error),
     #[error("invalid input: {0}")]
     Invalid(String),
-    #[error("feature unavailable: {0}")]
-    Unsupported(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -219,10 +232,6 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(cli) {
         Ok(code) => ExitCode::from(code),
-        Err(AppError::Unsupported(message)) => {
-            eprintln!("unsupported: {message}");
-            ExitCode::from(5)
-        }
         Err(err) => {
             eprintln!("error: {err}");
             ExitCode::from(1)
@@ -278,9 +287,13 @@ fn run(cli: Cli) -> Result<u8, AppError> {
         Command::Verify(args) => verify_bundle_shape(cli.json, &args.bundle),
         Command::Patch(args) => patch(cli.json, args),
         Command::Run(args) => run_guarded(cli.json, args),
-        Command::Mcp(_) => Err(AppError::Unsupported(
-            "MCP broker core is integrated and tested, but no concrete stdio/HTTP transport is wired into the CLI yet; refusing to claim proxy enforcement".into(),
-        )),
+        Command::Mcp(args) => match args.command {
+            McpCommand::Proxy { config } => {
+                let config =
+                    config.unwrap_or_else(|| PathBuf::from(".proofdrift").join("mcp-proxy.json"));
+                mcp_cli::run_proxy(&config).map_err(AppError::Invalid)
+            }
+        },
         Command::Provenance(args) => provenance(cli.json, args.command),
     }
 }
@@ -653,12 +666,34 @@ fn policy(json: bool, cmd: PolicyCommand) -> Result<u8, AppError> {
 
 fn run_guarded(json: bool, args: RunArgs) -> Result<u8, AppError> {
     let cwd = std::env::current_dir()?;
+    let isolation = match args.isolate {
+        IsolationArg::None => {
+            if args.docker_image.is_some() || args.workspace_write {
+                return Err(AppError::Invalid(
+                    "--docker-image/--workspace-write require --isolate docker".into(),
+                ));
+            }
+            runtime_cli::RunIsolation::None
+        }
+        IsolationArg::Docker => {
+            let image = args.docker_image.clone().ok_or_else(|| {
+                AppError::Invalid(
+                    "--isolate docker requires --docker-image <name>@sha256:<64-hex>".into(),
+                )
+            })?;
+            runtime_cli::RunIsolation::Docker {
+                image,
+                workspace_writable: args.workspace_write,
+            }
+        }
+    };
     match runtime_cli::execute_guarded_command(
         &args.command,
         &cwd,
         &args.policy,
         args.timeout_ms,
         args.max_output_bytes,
+        isolation,
     ) {
         Ok(data) => {
             let code = if data.status_code == Some(0) { 0 } else { 1 };

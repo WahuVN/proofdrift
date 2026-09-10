@@ -38,6 +38,8 @@ pub struct RuntimeEvent {
     pub outcome: String,
     pub enforcement_level: EnforcementLevel,
     pub enforcement_mode: EnforcementMode,
+    /// Human-readable, boundary-specific description of what the adapter actually enforces.
+    pub enforcement_scope: String,
     #[serde(default)]
     pub evidence_refs: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

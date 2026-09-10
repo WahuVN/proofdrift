@@ -1,11 +1,12 @@
-//! Runtime enforcement primitives for the ProofDrift/ProofDrift codename project.
+//! Runtime enforcement primitives for ProofDrift.
 //!
-//! This crate deliberately distinguishes an ProofDrift-controlled broker/process wrapper from
-//! OS isolation. Nothing here claims ProofDrift L2 isolation.
+//! Enforcement levels are boundary-specific. The direct process wrapper is L1; an execution
+//! backend may report L2 only when it actually dispatches through a concrete isolation boundary.
 
 pub mod adapter;
 pub mod approval;
 pub mod canonical;
+pub mod docker;
 pub mod event;
 pub mod git_guard;
 pub mod policy;
@@ -18,6 +19,7 @@ pub use approval::{
     ApprovalChallenge, ApprovalError, ApprovalGrant, ApprovalManager, Clock, SystemClock,
 };
 pub use canonical::{canonical_json_bytes, canonical_sha256, redact_json};
+pub use docker::{DockerCommandRunner, DockerIsolationConfig};
 pub use event::{
     EnforcementLevel, EnforcementMode, EventSinkError, InMemoryEventSink, RuntimeEvent,
     RuntimeEventSink,

@@ -99,6 +99,18 @@ pub enum ProcessError {
 #[async_trait]
 pub trait CommandRunner: Send + Sync {
     async fn run(&self, invocation: &ProcessInvocation) -> Result<ProcessOutput, ProcessError>;
+
+    fn enforcement_level(&self) -> EnforcementLevel {
+        EnforcementLevel::L1Brokered
+    }
+
+    fn enforcement_scope(&self) -> &'static str {
+        "process-dispatch-boundary; not OS isolation or nested side-effect interception"
+    }
+
+    fn adapter_id(&self) -> &'static str {
+        "proofdrift-runtime-process-wrapper"
+    }
 }
 
 #[derive(Debug, Default)]
@@ -258,6 +270,9 @@ impl GuardedProcessExecutor {
                 "shell_kind": classification.shell_kind,
                 "opaque_nested_shell": classification.opaque_nested_shell,
                 "git_intent": classification.git_intent,
+                "runner_adapter_id": self.runner.adapter_id(),
+                "runner_enforcement_level": self.runner.enforcement_level(),
+                "runner_enforcement_scope": self.runner.enforcement_scope(),
             }),
         );
         let decision = self
@@ -348,7 +363,7 @@ impl GuardedProcessExecutor {
                 sequence,
                 timestamp_unix_ms,
                 actor: self.principal.clone(),
-                adapter_id: "proofdrift-runtime-process-wrapper".to_owned(),
+                adapter_id: self.runner.adapter_id().to_owned(),
                 adapter_version: env!("CARGO_PKG_VERSION").to_owned(),
                 event_type: "process.exec".to_owned(),
                 proposed_action: request.action.clone(),
@@ -356,8 +371,9 @@ impl GuardedProcessExecutor {
                 normalized_args: request.context.clone(),
                 decision_id: Some(decision_id.to_owned()),
                 outcome: outcome.to_owned(),
-                enforcement_level: EnforcementLevel::L1Brokered,
+                enforcement_level: self.runner.enforcement_level(),
                 enforcement_mode: mode,
+                enforcement_scope: self.runner.enforcement_scope().to_owned(),
                 evidence_refs: Vec::new(),
                 prev_event_hash: None,
                 event_hash: None,
@@ -399,6 +415,33 @@ mod tests {
                 stdout: b"ok".to_vec(),
                 stderr: vec![],
             })
+        }
+    }
+
+    struct IsolatedCountingRunner {
+        calls: Arc<AtomicUsize>,
+    }
+    #[async_trait]
+    impl CommandRunner for IsolatedCountingRunner {
+        async fn run(&self, _: &ProcessInvocation) -> Result<ProcessOutput, ProcessError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ProcessOutput {
+                status_code: Some(0),
+                stdout: b"isolated".to_vec(),
+                stderr: vec![],
+            })
+        }
+
+        fn enforcement_level(&self) -> EnforcementLevel {
+            EnforcementLevel::L2Isolated
+        }
+
+        fn enforcement_scope(&self) -> &'static str {
+            "synthetic-test-isolation"
+        }
+
+        fn adapter_id(&self) -> &'static str {
+            "synthetic-isolated-runner"
         }
     }
 
@@ -512,6 +555,36 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].outcome, "DISPATCHING");
         assert_eq!(events[1].outcome, "PROCESS_TIMEOUT");
+    }
+
+    #[tokio::test]
+    async fn runner_metadata_controls_recorded_enforcement_level() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sink = Arc::new(InMemoryEventSink::default());
+        let executor = GuardedProcessExecutor::new(
+            Arc::new(FixedPolicy(Decision::Allow)),
+            sink.clone(),
+            Arc::new(ApprovalManager::new(10_000)),
+            Arc::new(IsolatedCountingRunner {
+                calls: calls.clone(),
+            }),
+            "isolated-session",
+            "test-agent",
+        );
+        let output = executor
+            .execute(&ProcessInvocation::new("fake", vec![]), None)
+            .await
+            .unwrap();
+        assert_eq!(output.stdout, b"isolated");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let events = sink.events();
+        assert_eq!(events.len(), 2);
+        assert!(events
+            .iter()
+            .all(|event| event.enforcement_level == EnforcementLevel::L2Isolated));
+        assert!(events
+            .iter()
+            .all(|event| event.adapter_id == "synthetic-isolated-runner"));
     }
 
     #[tokio::test]

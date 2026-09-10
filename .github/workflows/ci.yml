@@ -1,21 +1,63 @@
-name: ci
+﻿name: ci
+
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
+
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  rust:
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Strict lint
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - run: cargo build --workspace --release
+      - name: Test workspace
+        run: cargo test --locked --workspace
+
+  msrv:
+    name: msrv (1.85.0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - name: Check minimum supported Rust version
+        run: cargo check --locked --workspace
+
+  ci-success:
+    name: ci-success
+    if: always()
+    needs: [quality, test, msrv]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all CI jobs to pass
+        shell: bash
+        run: |
+          test '${{ needs.quality.result }}' = 'success'
+          test '${{ needs.test.result }}' = 'success'
+          test '${{ needs.msrv.result }}' = 'success'

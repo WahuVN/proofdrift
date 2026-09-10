@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import subprocess
@@ -11,41 +10,30 @@ import sys
 from pathlib import Path
 
 ENGINE_ROOT = Path(__file__).resolve().parents[1]
-DRIFT_FAMILIES = {
-    "provenance drift": {"missing_provenance_trusted", "provenance_conflict"},
-    "capability drift": {"capability_inferred_as_observed", "tool_schema_rugpull", "broad_shell"},
-    "policy drift": {"policy_digest_mismatch", "approval_scope_mismatch", "decision_request_digest_mismatch"},
-    "runtime drift": {"unknown_enforcement_claim", "toctou_executable_swap", "approval_concurrent_replay"},
-    "patch-impact drift": {"risky_auth_patch", "risky_db_patch", "risky_concurrency_patch"},
-    "test-proof drift": {"test_weakening", "test_claim_without_observation"},
-}
-CRITICAL_SECURITY_CATEGORIES = {
-    "tampered_receipt",
-    "approval_concurrent_replay",
-    "missing_provenance_trusted",
-    "policy_digest_mismatch",
-    "decision_request_digest_mismatch",
-    "toctou_executable_swap",
-    "evidence_reorder",
-    "evidence_deleted_event",
-}
-CRITICAL_SPEC_FIXTURES = {
-    "approval-replay.json",
-    "bundle-corrupted-byte.json",
-    "policy-digest-changed.json",
-    "provenance-missing-edge.json",
+EXPECTED_DRIFT_CLASSES = {
+    "provenance_drift",
+    "capability_drift",
+    "policy_drift",
+    "runtime_drift",
+    "patch_impact_drift",
+    "test_proof_drift",
 }
 
 
-def canonical_digest(value: object) -> str:
-    raw = json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
+def load_json(path: Path) -> dict:
+    value = json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{path}: root must be an object")
+    return value
 
 
-def load_json(path: Path):
-    return json.loads(path.read_text(encoding="utf-8-sig"))
+def git_commit(root: Path) -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=False, text=True, capture_output=True
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"cannot resolve git commit for {root}: {completed.stderr.strip()}")
+    return completed.stdout.strip()
 
 
 def engine_schema_version() -> str:
@@ -58,23 +46,33 @@ def engine_schema_version() -> str:
     return match.group(1)
 
 
-def run_native_validator(cwd: Path, script: str) -> dict[str, object]:
+def run_json_validator(cwd: Path, script: str) -> dict:
     completed = subprocess.run(
-        [sys.executable, script],
-        cwd=cwd,
-        check=False,
-        text=True,
-        capture_output=True,
+        [sys.executable, script], cwd=cwd, check=False, text=True, capture_output=True
     )
     if completed.returncode != 0:
         raise RuntimeError(
-            f"native validator failed in {cwd}: {completed.stderr or completed.stdout}"
+            f"validator failed: {cwd / script}\n{completed.stderr or completed.stdout}"
         )
-    return {
-        "status": "pass",
-        "command": f"{Path(sys.executable).name} {script}",
-        "summary": completed.stdout.strip(),
-    }
+    text = completed.stdout.strip()
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"validator did not emit JSON: {cwd / script}: {exc}") from exc
+    if not isinstance(value, dict) or value.get("status") not in (None, "pass"):
+        raise RuntimeError(f"validator returned a non-passing result: {cwd / script}")
+    return value
+
+
+def run_validator(cwd: Path, script: str) -> str:
+    completed = subprocess.run(
+        [sys.executable, script], cwd=cwd, check=False, text=True, capture_output=True
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"validator failed: {cwd / script}\n{completed.stderr or completed.stdout}"
+        )
+    return completed.stdout.strip()
 
 
 def main() -> int:
@@ -82,17 +80,23 @@ def main() -> int:
     parser.add_argument("--spec", required=True, type=Path)
     parser.add_argument("--bench", required=True, type=Path)
     parser.add_argument("--json-output", type=Path)
-    parser.add_argument(
-        "--release-strict",
-        action="store_true",
-        help="Require benchmark ground-truth reason metadata expected after benchmark-science merge.",
-    )
     args = parser.parse_args()
 
     spec = args.spec.resolve()
     bench = args.bench.resolve()
-    native_spec = run_native_validator(spec, "contracts/tools/validate_examples.py")
-    native_bench = run_native_validator(bench, "verify_corpus.py")
+    if not spec.is_dir() or not bench.is_dir():
+        raise RuntimeError("spec and bench paths must exist")
+
+    # Run each repository's own fail-closed validators first. Cross-repo code must not
+    # duplicate or silently weaken the native release policy.
+    spec_validation = run_validator(spec, "contracts/tools/validate_examples.py")
+    spec_conformance = run_validator(spec, "contracts/tools/validate_conformance.py")
+    spec_semantics = run_json_validator(spec, "contracts/tools/validate_semantics.py")
+    spec_release = run_json_validator(spec, "contracts/tools/security_release_gate.py")
+
+    bench_corpus = run_validator(bench, "verify_corpus.py")
+    bench_quality = run_json_validator(bench, "verify_quality_gate.py")
+    bench_release = run_json_validator(bench, "security_release_gate.py")
 
     schema_version = engine_schema_version()
     spec_index = load_json(spec / "contracts" / "schemas" / "index.json")
@@ -102,106 +106,60 @@ def main() -> int:
         )
     if spec_index.get("canonicalization") != "proofdrift-json-v1":
         raise RuntimeError("unexpected spec canonicalization profile")
+    schema_ids = spec_index.get("schema_ids")
+    if not isinstance(schema_ids, dict) or len(schema_ids) != len(spec_index.get("schemas", [])):
+        raise RuntimeError("spec schema_ids coverage is incomplete")
+    if any(not value.startswith(f"urn:proofdrift:schema:{schema_version}:") for value in schema_ids.values()):
+        raise RuntimeError("spec contains non-versioned or mutable schema identity")
 
-    schema_dir = spec / "contracts" / "schemas"
-    indexed_schemas = set(spec_index.get("schemas", []))
-    actual_schemas = {path.name for path in schema_dir.glob("*.schema.json")}
-    if indexed_schemas != actual_schemas:
-        raise RuntimeError(
-            f"schema index mismatch: missing={sorted(actual_schemas - indexed_schemas)} "
-            f"stale={sorted(indexed_schemas - actual_schemas)}"
-        )
-
-    valid_names = {
-        path.name.removesuffix(".valid.json")
-        for path in (spec / "contracts" / "examples" / "valid").glob("*.valid.json")
-    }
-    schema_names = {name.removesuffix(".schema.json") for name in indexed_schemas}
-    if valid_names != schema_names:
-        raise RuntimeError(
-            f"valid example coverage mismatch: schemas_without_example={sorted(schema_names - valid_names)} "
-            f"examples_without_schema={sorted(valid_names - schema_names)}"
-        )
-
-    fixture_names = {
-        path.name for path in (spec / "contracts" / "fixtures").glob("*.json")
-    }
-    missing_fixtures = CRITICAL_SPEC_FIXTURES - fixture_names
-    if missing_fixtures:
-        raise RuntimeError(f"missing critical spec fixtures: {sorted(missing_fixtures)}")
-
-    case_paths = sorted((bench / "corpus").glob("*.json"))
-    cases = [load_json(path) for path in case_paths]
-    if not cases:
-        raise RuntimeError("benchmark corpus is empty")
-    ids = [case.get("id") for case in cases]
-    if len(ids) != len(set(ids)):
-        raise RuntimeError("benchmark corpus contains duplicate case ids")
-    for path, case in zip(case_paths, cases, strict=True):
-        required = {"schema_version", "id", "category", "benign", "input", "expected", "tags"}
-        if not required <= set(case):
-            raise RuntimeError(f"{path.name}: missing required corpus fields")
-        if case.get("schema_version") != "1":
-            raise RuntimeError(f"{path.name}: unsupported corpus schema version")
-        if not case.get("expected", {}).get("minimum_evidence"):
-            raise RuntimeError(f"{path.name}: expected.minimum_evidence must not be empty")
-
-    categories = {case["category"] for case in cases}
-    missing_security = CRITICAL_SECURITY_CATEGORIES - categories
-    if missing_security:
-        raise RuntimeError(f"missing security regression categories: {sorted(missing_security)}")
-
-    family_evidence: dict[str, list[str]] = {}
-    for family, candidates in DRIFT_FAMILIES.items():
-        present = sorted(categories & candidates)
-        if not present:
-            raise RuntimeError(f"benchmark corpus has no evidence for required family {family!r}")
-        family_evidence[family] = present
-
-    benchmark_reference = load_json(bench / "benchmark_result_reference.json")
-    if benchmark_reference.get("cases") != len(cases):
-        raise RuntimeError("benchmark reference case count does not match corpus")
-    if benchmark_reference.get("operations") != len(cases) * benchmark_reference.get("iterations", 0):
-        raise RuntimeError("benchmark reference operation count is internally inconsistent")
-
-    ground_truth_reason_count = sum(
-        1
-        for case in cases
-        if case.get("ground_truth_reason")
-        or case.get("expected", {}).get("ground_truth_reason")
-    )
-    if args.release_strict and ground_truth_reason_count != len(cases):
-        raise RuntimeError(
-            "release-strict requires ground-truth reason metadata for every benchmark case; "
-            f"found {ground_truth_reason_count}/{len(cases)}"
-        )
+    manifest = load_json(bench / "benchmark_manifest.json")
+    if manifest.get("benchmark_version") != "3":
+        raise RuntimeError("ProofDrift engine release requires Bench v3")
+    if set(manifest.get("drift_classes") or []) != EXPECTED_DRIFT_CLASSES:
+        raise RuntimeError("Bench v3 does not cover the six required drift classes")
+    counts = manifest.get("counts") or {}
+    if counts.get("drift_pairs", 0) < 24 or counts.get("hard_controls", 0) < 18:
+        raise RuntimeError("Bench v3 science surface regressed below the accepted release baseline")
+    if bench_release.get("science_oracle_digest") != manifest.get("drift_suite_digest"):
+        raise RuntimeError("Bench v3 science oracle digest does not match its manifest")
+    if spec_release.get("schemas") != len(spec_index["schemas"]):
+        raise RuntimeError("spec release evidence schema count disagrees with the index")
+    if spec_semantics.get("fixture_trace_coverage") != 1.0:
+        raise RuntimeError("spec semantic fixture trace coverage must remain 100%")
 
     evidence = {
-        "schema_version": "1",
+        "schema_version": "2",
         "gate": "proofdrift_cross_repo_release_gate",
         "status": "pass",
-        "engine_schema_version": schema_version,
-        "canonicalization": spec_index["canonicalization"],
+        "commits": {
+            "engine": git_commit(ENGINE_ROOT),
+            "spec": git_commit(spec),
+            "bench": git_commit(bench),
+        },
+        "engine": {
+            "schema_version": schema_version,
+        },
         "spec": {
-            "schemas": len(indexed_schemas),
-            "valid_examples": len(valid_names),
-            "critical_fixtures": sorted(CRITICAL_SPEC_FIXTURES),
-            "native_validator": native_spec,
+            "schemas": len(spec_index["schemas"]),
+            "immutable_schema_ids": len(schema_ids),
+            "contract_tree_sha256": spec_release.get("contract_tree_sha256"),
+            "semantic_digest": spec_semantics.get("semantic_digest"),
+            "fixture_trace_coverage": spec_semantics.get("fixture_trace_coverage"),
+            "validation_summary": spec_validation,
+            "conformance_summary": spec_conformance,
         },
         "bench": {
-            "cases": len(cases),
-            "categories": len(categories),
-            "benign_cases": sum(1 for case in cases if case["benign"]),
-            "adversarial_cases": sum(1 for case in cases if not case["benign"]),
-            "corpus_digest": canonical_digest(cases),
-            "required_drift_families": family_evidence,
-            "critical_security_categories": sorted(CRITICAL_SECURITY_CATEGORIES),
-            "ground_truth_reason_coverage": f"{ground_truth_reason_count}/{len(cases)}",
-            "native_validator": native_bench,
+            "benchmark_version": manifest.get("benchmark_version"),
+            "legacy_cases": bench_release.get("legacy_cases"),
+            "drift_pairs": bench_release.get("drift_pairs"),
+            "hard_controls": bench_release.get("hard_controls"),
+            "science_targets": bench_release.get("science_targets"),
+            "drift_classes": sorted(EXPECTED_DRIFT_CLASSES),
+            "drift_suite_digest": manifest.get("drift_suite_digest"),
+            "quality_target_set_digest": bench_quality.get("target_set_digest"),
+            "corpus_summary": bench_corpus,
         },
-        "release_strict": args.release_strict,
     }
-
     rendered = json.dumps(evidence, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     if args.json_output:
         args.json_output.write_text(rendered, encoding="utf-8")

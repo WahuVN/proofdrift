@@ -506,6 +506,110 @@ pub struct TrustDiff {
     pub extensions: Extensions,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceReferenceKind {
+    Artifact,
+    Event,
+    Policy,
+    Test,
+    Runtime,
+    External,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct EvidenceReference {
+    pub schema_version: String,
+    pub ref_id: String,
+    pub kind: EvidenceReferenceKind,
+    pub uri: String,
+    pub digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(flatten, default)]
+    pub extensions: Extensions,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct EvidenceEnvelope {
+    pub schema_version: String,
+    pub subject: String,
+    #[serde(default)]
+    pub provenance: Vec<ArtifactIdentity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+    pub sequence: u64,
+    #[serde(default)]
+    pub policy_context: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub capability_context: Vec<Capability>,
+    pub decision: Value,
+    #[serde(default)]
+    pub evidence_refs: Vec<EvidenceReference>,
+    pub digest: String,
+    #[serde(default)]
+    pub extensions: Extensions,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DriftClass {
+    #[serde(rename = "provenance drift")]
+    Provenance,
+    #[serde(rename = "capability drift")]
+    Capability,
+    #[serde(rename = "policy drift")]
+    Policy,
+    #[serde(rename = "runtime drift")]
+    Runtime,
+    #[serde(rename = "patch-impact drift")]
+    PatchImpact,
+    #[serde(rename = "test-proof drift")]
+    TestProof,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+pub enum EvaluationVerdict {
+    Pass,
+    Warn,
+    Block,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DriftFinding {
+    pub schema_version: String,
+    pub finding_id: String,
+    pub drift_class: DriftClass,
+    pub verdict: EvaluationVerdict,
+    pub explanation: String,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    pub fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<Value>,
+    #[serde(flatten, default)]
+    pub extensions: Extensions,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct EvaluationDecision {
+    pub schema_version: String,
+    pub decision_id: String,
+    pub subject: String,
+    pub verdict: EvaluationVerdict,
+    #[serde(default)]
+    pub findings: Vec<DriftFinding>,
+    #[serde(default)]
+    pub evidence_refs: Vec<String>,
+    pub digest: String,
+    #[serde(default)]
+    pub diagnostics: Vec<String>,
+    #[serde(flatten, default)]
+    pub extensions: Extensions,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

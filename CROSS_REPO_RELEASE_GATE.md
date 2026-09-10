@@ -24,14 +24,12 @@ From a checkout where the three repositories are siblings:
 ```sh
 python tools/cross_repo_gate.py \
   --spec ../proofdrift-spec \
-  --bench ../proofdrift-bench \
-  --json-output cross-repo-evidence.json \
-  --release-strict
+  --bench ../proofdrift-bench \  --json-output cross-repo-evidence.json
 ```
 
-`--release-strict` additionally requires every benchmark record to carry ground-truth reason metadata. During parallel development, CI may run without that flag until the benchmark-science branch providing the metadata has landed; public release must use the strict form.
+Ground-truth rationale, Bench v3 science-suite coverage, immutable spec identities, semantic traceability, and each repository's native fail-closed release gate are mandatory on every run; there is no weaker release mode.
 
-The gate fails on schema-version mismatch, unexpected canonicalization profile, stale schema index, missing valid examples, missing critical security fixtures/corpus categories, duplicate/invalid corpus metadata, benchmark-reference count inconsistency, or missing evidence for any required drift family. It also runs the native spec and benchmark validators.
+The gate fails on schema-version mismatch, unexpected canonicalization, mutable or incomplete schema identity, semantic trace coverage below 100%, native release-gate failure, Bench version drift, regression below 24 drift pairs or 18 hard controls, missing any of the six drift classes, or science-oracle digest mismatch. It records exact engine/spec/bench commits in the evidence JSON.
 
 Engine/spec wire conformance is checked separately by:
 

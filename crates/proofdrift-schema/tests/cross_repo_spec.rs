@@ -1,6 +1,7 @@
 use proofdrift_schema::{
     from_json_slice_bounded, AgentEvent, ArtifactIdentity, BaselineSnapshot, BundleManifest,
-    Capability, EvidenceValue, Finding, PatchImpact, PolicyDecision, PolicyRequest, ProvenanceEdge,
+    Capability, DriftFinding, EvaluationDecision, EvidenceEnvelope, EvidenceReference,
+    EvidenceValue, Finding, PatchImpact, PolicyDecision, PolicyRequest, ProvenanceEdge,
     TestEvidence, TrustDiff, TrustReport, SCHEMA_VERSION,
 };
 use serde::de::DeserializeOwned;
@@ -44,7 +45,11 @@ fn checked_in_spec_examples_deserialize_with_engine_contracts(
     parse_example::<BaselineSnapshot>(&spec_dir, "baseline-snapshot")?;
     parse_example::<BundleManifest>(&spec_dir, "bundle-manifest")?;
     parse_example::<Capability>(&spec_dir, "capability")?;
+    parse_example::<EvidenceEnvelope>(&spec_dir, "evidence-envelope")?;
+    parse_example::<EvidenceReference>(&spec_dir, "evidence-reference")?;
     parse_example::<EvidenceValue<Value>>(&spec_dir, "evidence-value")?;
+    parse_example::<DriftFinding>(&spec_dir, "drift-finding")?;
+    parse_example::<EvaluationDecision>(&spec_dir, "evaluation-decision")?;
     parse_example::<Finding>(&spec_dir, "finding")?;
     parse_example::<Value>(&spec_dir, "fixture-case")?;
     parse_example::<PatchImpact>(&spec_dir, "patch-impact")?;

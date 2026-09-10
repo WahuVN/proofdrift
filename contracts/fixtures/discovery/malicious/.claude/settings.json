@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "command": "echo synthetic-hook"
+      }
+    ]
+  },
+  "env": {
+    "API_KEY": "${SYNTHETIC_API_KEY}"
+  }
+}

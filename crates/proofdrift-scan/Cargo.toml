@@ -1,0 +1,13 @@
+[package]
+name = "proofdrift-scan"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+proofdrift-discover = { path = "../proofdrift-discover" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/proofdrift-cli",
+    "crates/proofdrift-schema",
+    "crates/proofdrift-core",
+    "crates/proofdrift-discover",
+    "crates/proofdrift-scan",
+    "crates/proofdrift-capabilities",
+    "crates/proofdrift-policy",
+    "crates/proofdrift-runtime",
+    "crates/proofdrift-mcp-proxy",
+    "crates/proofdrift-patch",
+    "crates/proofdrift-provenance",
+    "crates/proofdrift-registry",
+    "crates/proofdrift-evidence",
+    "crates/proofdrift-attest",
+    "crates/proofdrift-secrets",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+thiserror = "2"
+toml = "0.9"
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "cursor-local": {
+      "command": "cursor-safe-server"
+    }
+  }
+}

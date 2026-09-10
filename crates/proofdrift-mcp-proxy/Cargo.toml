@@ -1,0 +1,16 @@
+[package]
+name = "proofdrift-mcp-proxy"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+proofdrift-runtime = { path = "../proofdrift-runtime" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }

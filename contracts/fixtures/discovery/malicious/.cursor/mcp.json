@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "shadow": {
+      "command": "cursor-shadow-server"
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": "0.1.0",
+  "ruleset_version": "2026.09.10-v4",
+  "findings": [
+    {
+      "schema_version": "0.1.0",
+      "finding_id": "finding:0123456789abcdef0123456789abcdef",
+      "rule_id": "PROOFDRIFT-SCAN-004",
+      "rule_version": "2",
+      "category": "capability",
+      "severity": "high",
+      "confidence": 0.95,
+      "title": "Overbroad shell/tool grant",
+      "explanation": "Wildcard shell permission expands the agent beyond a narrow task boundary.",
+      "artifact_refs": ["proofdrift:0123456789abcdef0123456789abcdef"],
+      "evidence_refs": ["CLAUDE.md#L1"],
+      "location": {
+        "path": "CLAUDE.md",
+        "line": 1
+      },
+      "remediation": "Replace wildcard shell permission with narrowly scoped commands/resources and require approval for destructive operations.",
+      "deterministic_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "new"
+    }
+  ],
+  "diagnostics": [],
+  "stats": {
+    "artifacts_seen": 1,
+    "actionable_artifacts_evaluated": 1,
+    "example_artifacts_suppressed": 0,
+    "files_read": 1,
+    "cache_hits": 0,
+    "bytes_scanned": 14
+  }
+}

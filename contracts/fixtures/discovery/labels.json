@@ -1,0 +1,19 @@
+{
+  "schema_version": "0.1.0",
+  "safe_expected_rule_ids": [],
+  "malicious_expected_rule_ids": [
+    "PROOFDRIFT-SCAN-001",
+    "PROOFDRIFT-SCAN-002",
+    "PROOFDRIFT-SCAN-003",
+    "PROOFDRIFT-SCAN-004",
+    "PROOFDRIFT-SCAN-005",
+    "PROOFDRIFT-SCAN-006",
+    "PROOFDRIFT-SCAN-007",
+    "PROOFDRIFT-SCAN-008",
+    "PROOFDRIFT-SCAN-009",
+    "PROOFDRIFT-SCAN-010",
+    "PROOFDRIFT-SCAN-011",
+    "PROOFDRIFT-SCAN-012",
+    "PROOFDRIFT-SCAN-013"
+  ]
+}

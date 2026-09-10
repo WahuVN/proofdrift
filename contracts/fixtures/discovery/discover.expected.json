@@ -1,0 +1,39 @@
+{
+  "schema_version": "0.1.0",
+  "root": "<ROOT>",
+  "artifacts": [
+    {
+      "schema_version": "0.1.0",
+      "artifact_id": "proofdrift:0123456789abcdef0123456789abcdef",
+      "artifact_type": "skill",
+      "name": "safe",
+      "harness": "claude_code",
+      "component_type": "skill",
+      "runtime_confidence": "active_runtime",
+      "local_path": "<ROOT>/.claude/skills/safe/SKILL.md",
+      "content_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "provenance_status": "inferred",
+      "declared_capabilities": [],
+      "inferred_capabilities": ["fs.read"],
+      "evidence": [
+        {
+          "kind": "file_content",
+          "location": ".claude/skills/safe/SKILL.md",
+          "detail": "passively discovered known harness surface"
+        }
+      ],
+      "metadata": {
+        "passive_discovery": "true",
+        "root_relative": ".claude/skills/safe/SKILL.md"
+      }
+    }
+  ],
+  "diagnostics": [],
+  "stats": {
+    "entries_visited": 1,
+    "files_hashed": 1,
+    "files_skipped_too_large": 0,
+    "symlinks_skipped": 0,
+    "parse_warnings": 0
+  }
+}

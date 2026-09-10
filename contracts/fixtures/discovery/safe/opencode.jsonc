@@ -1,0 +1,8 @@
+{
+  /* JSONC is intentional. */
+  "mcp": {
+    "opencode-local": {
+      "command": ["opencode-safe-server"],
+    },
+  },
+}

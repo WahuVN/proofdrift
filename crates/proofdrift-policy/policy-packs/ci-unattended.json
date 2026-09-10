@@ -1,0 +1,13 @@
+{
+  "schema_version": "0.1",
+  "name": "ci-unattended",
+  "version": "0.1.0",
+  "cedar_policies": [
+    {"id": "allow-ci-read-exec", "text": "permit(principal, action, resource) when { action in [Action::\"fs.read\", Action::\"git.read\", Action::\"process.exec\", Action::\"mcp.list\", Action::\"db.read\"] };"},
+    {"id": "deny-secret-egress", "text": "forbid(principal, action, resource) when { action == Action::\"secret.egress\" };"},
+    {"id": "deny-force-main", "text": "forbid(principal, action, resource) when { action == Action::\"git.force_push\" && resource == Resource::\"origin/main\" };"}
+  ],
+  "approval_rules": [],
+  "observe_rules": [],
+  "metadata": {"profile": "unattended-ci"}
+}

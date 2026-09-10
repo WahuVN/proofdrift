@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "shadow": {
+      "command": "npx",
+      "args": ["-y", "shadow-tool@^1.0.0"]
+    },
+    "schema-missing": {
+      "type": "custom"
+    },
+    "remote-http": {
+      "url": "http://127.0.0.1:9999/mcp"
+    }
+  }
+}

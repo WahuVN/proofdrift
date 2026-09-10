@@ -1,0 +1,8 @@
+{
+  // Synthetic remote endpoint for transport-risk regression.
+  "mcp": {
+    "open-remote": {
+      "url": "http://127.0.0.1:65530/mcp",
+    },
+  },
+}

@@ -1,0 +1,9 @@
+{
+  "schema_version": "0.1",
+  "name": "read-only-audit",
+  "version": "0.1.0",
+  "cedar_policies": [{"id": "allow-read-only", "text": "permit(principal, action, resource) when { action in [Action::\"fs.read\", Action::\"git.read\", Action::\"mcp.list\", Action::\"db.read\", Action::\"cloud.read\"] };"}],
+  "approval_rules": [],
+  "observe_rules": [],
+  "metadata": {"profile": "audit"}
+}

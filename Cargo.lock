@@ -1360,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-attest"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "hex",
  "serde",
@@ -1372,7 +1372,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-capabilities"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1383,7 +1383,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-cli"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "clap",
  "hex",
@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-core"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "proofdrift-schema",
  "serde",
@@ -1417,7 +1417,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-discover"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1428,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-evidence"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "hex",
  "regex",
@@ -1443,7 +1443,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-mcp-proxy"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "proofdrift-runtime",
@@ -1455,11 +1455,11 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-patch"
-version = "0.1.0"
+version = "0.0.2"
 
 [[package]]
 name = "proofdrift-policy"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "cedar-policy",
  "proofdrift-capabilities",
@@ -1471,7 +1471,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-provenance"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1482,7 +1482,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-registry"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "proofdrift-provenance",
  "rusqlite",
@@ -1493,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-runtime"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "getrandom 0.2.17",
@@ -1507,7 +1507,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-scan"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "proofdrift-discover",
  "serde",
@@ -1518,7 +1518,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-schema"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -1528,7 +1528,7 @@ dependencies = [
 
 [[package]]
 name = "proofdrift-secrets"
-version = "0.1.0"
+version = "0.0.2"
 dependencies = [
  "base64 0.22.1",
  "blake3",

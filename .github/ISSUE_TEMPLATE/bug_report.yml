@@ -24,7 +24,7 @@ body:
     id: version
     attributes:
       label: ProofDrift version
-      placeholder: proofdrift 0.0.1
+      placeholder: proofdrift 0.0.x
   - type: dropdown
     id: os
     attributes:

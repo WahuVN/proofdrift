@@ -1,45 +1,108 @@
-name: release-artifacts
+name: release
+
 on:
   workflow_dispatch:
   push:
     tags:
       - 'v*'
+
 permissions:
   contents: read
+
 jobs:
   package:
+    name: package (${{ matrix.label }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            label: linux-x64
+            kind: tar
+          - os: windows-latest
+            label: windows-x64
+            kind: zip
+          - os: macos-latest
+            label: macos-arm64
+            kind: tar
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master 2026-09-10
+        with:
+          toolchain: stable
       - name: Build locked release binary
         run: cargo build --locked --release -p proofdrift-cli
-      - name: Package on Unix
-        if: runner.os != 'Windows'
+      - name: Package Unix archive
+        if: matrix.kind == 'tar'
         shell: bash
         run: |
-          mkdir -p dist
-          cp target/release/proofdrift dist/proofdrift
-          chmod +x dist/proofdrift
-          (cd dist && shasum -a 256 proofdrift > proofdrift.sha256)
-      - name: Package on Windows
-        if: runner.os == 'Windows'
+          version="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_REF}" != refs/tags/* ]]; then version="manual-${GITHUB_SHA::7}"; fi
+          mkdir -p package release
+          install -m 0755 target/release/proofdrift package/proofdrift
+          tar -czf "release/proofdrift-${version}-${{ matrix.label }}.tar.gz" -C package proofdrift
+      - name: Package Windows archive
+        if: matrix.kind == 'zip'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/proofdrift.exe dist/proofdrift.exe
-          $hash = (Get-FileHash dist/proofdrift.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  proofdrift.exe" | Set-Content -Encoding ascii dist/proofdrift.exe.sha256
-      - name: Upload unsigned build evidence
-        uses: actions/upload-artifact@v7
+          $version = $env:GITHUB_REF_NAME
+          if (-not $env:GITHUB_REF.StartsWith('refs/tags/')) { $version = "manual-$($env:GITHUB_SHA.Substring(0,7))" }
+          New-Item -ItemType Directory -Force package, release | Out-Null
+          Copy-Item target/release/proofdrift.exe package/proofdrift.exe
+          Compress-Archive -Path package/proofdrift.exe -DestinationPath "release/proofdrift-$version-${{ matrix.label }}.zip"
+      - name: Upload packaged archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: proofdrift-${{ runner.os }}-${{ runner.arch }}
-          path: dist/
+          name: release-${{ matrix.label }}
+          path: release/*
           if-no-files-found: error
+          retention-days: 14
 
-# Source publication does not imply a signed binary release. Signing and
-# release publication are enabled only after the signing identity is configured.
+  publish:
+    name: publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@006b7ce8314066bdf1765b4500370d40fa6917a3 # v0.24.2
+        with:
+          path: .
+          format: spdx-json
+          output-file: release/proofdrift-${{ github.ref_name }}-sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Generate release checksums
+        shell: bash
+        run: |
+          cd release
+          find . -maxdepth 1 -type f -name 'proofdrift-*' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: 'release/proofdrift-*'
+      - name: Publish or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          prerelease=()
+          if [[ "${tag}" == v0.* || "${tag}" == *-* ]]; then prerelease+=(--prerelease); fi
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" release/* --clobber
+          else
+            gh release create "${tag}" release/* --verify-tag --generate-notes --title "ProofDrift ${tag}" "${prerelease[@]}"
+          fi

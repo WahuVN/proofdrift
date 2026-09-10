@@ -1,6 +1,6 @@
 [package]
 name = "proofdrift-policy"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 license = "Apache-2.0"
 description = "Deterministic Cedar-backed policy evaluation and approval semantics for ProofDrift"

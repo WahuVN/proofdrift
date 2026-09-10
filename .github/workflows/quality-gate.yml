@@ -1,0 +1,149 @@
+name: quality-gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-regression:
+    name: security-regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master 2026-09-10
+        with:
+          toolchain: stable
+      - name: Security-critical unit and integration tests
+        run: |
+          cargo test --locked -p proofdrift-schema
+          cargo test --locked -p proofdrift-policy
+          cargo test --locked -p proofdrift-evidence
+      - name: Repeat race and determinism regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do
+            echo "repeat ${i}/3"
+            cargo test --locked -p proofdrift-policy approval_consume_is_atomic_under_race
+            cargo test --locked -p proofdrift-schema --test robustness canonical_profile_is_deterministic_and_idempotent_for_generated_json
+          done
+
+  dependency-security:
+    name: dependency-security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master 2026-09-10
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2
+        with:
+          tool: cargo-audit
+      - name: Rust dependency vulnerability audit
+        run: cargo audit
+
+  cross-repo:
+    name: cross-repo-conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: proofdrift
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: WahuVN/proofdrift-spec
+          path: proofdrift-spec
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: WahuVN/proofdrift-bench
+          path: proofdrift-bench
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: proofdrift-spec/requirements.txt
+      - name: Install spec validator dependencies
+        run: python -m pip install --disable-pip-version-check -r proofdrift-spec/requirements.txt
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master 2026-09-10
+        with:
+          toolchain: stable
+      - name: Run cross-repository release gate
+        working-directory: proofdrift
+        run: |
+          python tools/cross_repo_gate.py \
+            --spec ../proofdrift-spec \
+            --bench ../proofdrift-bench \
+            --json-output cross-repo-evidence.json
+      - name: Deserialize public spec examples with engine types
+        working-directory: proofdrift
+        env:
+          PROOFDRIFT_SPEC_DIR: ${{ github.workspace }}/proofdrift-spec
+        run: cargo test --locked -p proofdrift-schema --test cross_repo_spec
+      - name: Upload cross-repo evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cross-repo-release-evidence
+          path: proofdrift/cross-repo-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+  coverage:
+    name: security-critical-coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master 2026-09-10
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Enforce line coverage on security-critical crates
+        run: >-
+          cargo llvm-cov --locked
+          -p proofdrift-schema
+          -p proofdrift-policy
+          -p proofdrift-evidence
+          --lib --lcov --output-path lcov.info
+          --fail-under-lines 70
+      - name: Upload coverage evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: security-critical-lcov
+          path: lcov.info
+          if-no-files-found: error
+          retention-days: 30
+
+  quality-gate-success:
+    name: quality-gate-success
+    if: always()
+    needs: [security-regression, dependency-security, cross-repo, coverage]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every quality gate to pass
+        shell: bash
+        run: |
+          test '${{ needs.security-regression.result }}' = 'success'
+          test '${{ needs.dependency-security.result }}' = 'success'
+          test '${{ needs.cross-repo.result }}' = 'success'
+          test '${{ needs.coverage.result }}' = 'success'

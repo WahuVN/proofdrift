@@ -6,7 +6,7 @@ license = "Apache-2.0"
 description = "Deterministic Cedar-backed policy evaluation and approval semantics for ProofDrift"
 
 [dependencies]
-cedar-policy = { version = "=4.12.0", default-features = false }
+cedar-policy = { version = "=4.13.0", default-features = false }
 proofdrift-capabilities = { path = "../proofdrift-capabilities" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
